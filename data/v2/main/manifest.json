@@ -19,17 +19,17 @@
   "writer_temperature": 0.9,
   "agent_temperature": 0.7,
   "counts": {
-    "agent_runs": 120,
-    "parse_ok": 120
+    "agent_runs": 300,
+    "parse_ok": 300
   },
   "sha256": {
-    "scenarios": "3d8a5e403d8c24e7e6c84c196a9f7233ce78fca5ce014ca85c93fa9ef1e26708",
-    "requests": "eabdb8adddd8af4776976d8014eb74403b4c27efb64c27d828fbb7b05084a261",
-    "agent_runs": "0887c3e593bdbf43081fbc8e9e196f7aa27882dfe849a7c06e3436f5b895a9eb"
+    "scenarios": "a9115a3fa3c290affa0cfcd50d4dc0056d66909554d85c9553e45aff206db40b",
+    "requests": "64f5a0e4cf5173c02b5ab19653f0c8f7b61e023341db3bd3d69b739cd58f1148",
+    "agent_runs": "6f22d7675f3578c1f60c68843a95d745e78826dac5573589d262bdf0077ff66f"
   },
   "provenance": {
-    "date": "2026-11-09T06:26:49+00:00",
-    "experiment_repo_commit": "fa7fcfb91e2dda71c9438ef0d9b81608c3476762",
+    "date": "2026-11-09T17:57:01+00:00",
+    "experiment_repo_commit": "2ac0c1e289aa11628554d64a1cd54894ab217b88",
     "orienta_commit": "unknown",
     "boothpy_version": "0.5.8",
     "ollama_version": "0.35.0",
