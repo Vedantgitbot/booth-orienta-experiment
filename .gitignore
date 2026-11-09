@@ -5,3 +5,5 @@ __pycache__/
 .venv/
 env/
 venv/
+data/v2/pilot/
+results/v2/pilot/

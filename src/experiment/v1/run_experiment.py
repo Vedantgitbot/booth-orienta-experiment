@@ -1,11 +1,14 @@
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
-import booth_adapter
-import orienta_client
-from orienta_client import OrientaReviewError
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "shared"))
+
+import booth_adapter  # noqa: E402
+import orienta_client  # noqa: E402
+from orienta_client import OrientaReviewError  # noqa: E402
 
 
 ORIENTA_FLAGGED_DECISIONS = {"MODIFY", "ESCALATE", "BLOCK"}
@@ -31,14 +34,54 @@ def _ok(flagged, expected):
     return flagged == expected
 
 
+def _mark(x):
+    if x is None:
+        return "-"
+    return "ok" if x else "MISS"
+
+
+def check_cases(cases):
+    """Return (errors, warnings). Errors stop the run before any model call."""
+    errors, warnings, seen = [], [], set()
+
+    for i, case in enumerate(cases):
+        if not isinstance(case, dict):
+            errors.append(f"case #{i}: not a JSON object")
+            continue
+
+        name = case.get("id", f"<no id, case #{i}>")
+        missing = [k for k in REQUIRED if k not in case]
+
+        if missing:
+            errors.append(f"{name}: missing fields {missing}")
+
+        if name in seen:
+            errors.append(f"{name}: duplicate id")
+        seen.add(name)
+
+        ev = case.get("evidence")
+        if "evidence" in case and not (
+            isinstance(ev, list) and all(isinstance(e, str) for e in ev)
+        ):
+            errors.append(f"{name}: 'evidence' must be a list of strings")
+
+        if case.get("expected_label") not in EXPECTED_ACTION_FLAGGED:
+            warnings.append(
+                f"{name}: expected_label {case.get('expected_label')!r} is not "
+                f"one of {sorted(EXPECTED_ACTION_FLAGGED)}; Orienta and combined "
+                "will be UNGRADED for this case"
+            )
+
+        if not isinstance(case.get("expected_booth_flagged"), bool):
+            warnings.append(
+                f"{name}: expected_booth_flagged missing or not true/false; "
+                "BOOTH will be UNGRADED for this case"
+            )
+
+    return errors, warnings
+
+
 def run_one_case(case: dict) -> dict:
-    missing = [k for k in REQUIRED if k not in case]
-
-    if missing:
-        sys.exit(
-            f"Case {case.get('id', '<no id>')} is missing fields: {missing}"
-        )
-
     b = booth_adapter.flag_case(
         case["agent_claim"],
         case["evidence"],
@@ -174,20 +217,46 @@ def summarize(results: list) -> dict:
 
 
 def main():
-    if len(sys.argv) != 3:
+    ap = argparse.ArgumentParser(
+        description="Run BOOTH and Orienta on a v1-format case file."
+    )
+    ap.add_argument("cases", help="JSON array of case objects")
+    ap.add_argument("out", help="results JSON to write")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite the output file if it already exists",
+    )
+    args = ap.parse_args()
+
+    out_path = Path(args.out)
+
+    # Fail fast, before spending any model time.
+    if out_path.exists() and not args.force:
         sys.exit(
-            "Usage: python run_experiment.py "
-            "<cases.json> <results_out.json>"
+            f"{args.out} already exists. Choose a new name, or pass --force "
+            "to overwrite it (never do that to a frozen baseline file)."
         )
 
     cases = json.loads(
-        Path(sys.argv[1]).read_text()
+        Path(args.cases).read_text()
     )
 
     if not isinstance(cases, list):
         sys.exit(
             "cases file must be a JSON array of case objects"
         )
+
+    errors, warnings = check_cases(cases)
+
+    if errors:
+        sys.exit(
+            "Case file problems (nothing was run):\n  "
+            + "\n  ".join(errors)
+        )
+
+    for w in warnings:
+        print(f"WARNING: {w}", file=sys.stderr)
 
     booth_adapter.ensure_ready()
 
@@ -227,7 +296,7 @@ def main():
         "cases": results,
     }
 
-    Path(sys.argv[2]).write_text(
+    out_path.write_text(
         json.dumps(output, indent=2)
     )
 
@@ -254,22 +323,33 @@ def main():
 
     for r in results:
         g = r["graded"]
-
-        def mark(x):
-            if x is None:
-                return "-"
-            return "ok" if x else "MISS"
-
         print(
             f"  {r['id']:46s} "
             f"{r['bucket']:20s} "
-            f"booth={mark(g['booth_correct_vs_expected_booth'])} "
-            f"orienta={mark(g['orienta_correct_vs_expected_label'])} "
-            f"combined={mark(g['combined_correct_vs_expected_label'])}"
+            f"booth={_mark(g['booth_correct_vs_expected_booth'])} "
+            f"orienta={_mark(g['orienta_correct_vs_expected_label'])} "
+            f"combined={_mark(g['combined_correct_vs_expected_label'])}"
+        )
+
+    # BOOTH swallows judge failures (reports UNCERTAIN instead of raising), so a
+    # dead Ollama mid-run looks like "inconclusive" unless we say so here.
+    bad = [
+        r["id"]
+        for r in results
+        if r["bucket"] in ("BOOTH_INCONCLUSIVE", "ORIENTA_CALL_FAILED")
+    ]
+
+    if bad:
+        print(
+            f"\nWARNING: {len(bad)} case(s) have a failed or inconclusive "
+            f"layer and are partly ungraded: {bad}\n"
+            "Check Ollama and the Orienta MCP server before trusting these "
+            "results.",
+            file=sys.stderr,
         )
 
     print(
-        f"\nFull results written to {sys.argv[2]}"
+        f"\nFull results written to {args.out}"
     )
 
 

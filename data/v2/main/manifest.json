@@ -1,0 +1,39 @@
+{
+  "tag": "main",
+  "agents": [
+    "llama3.1:8b",
+    "qwen2.5-coder:7b",
+    "qwen2.5:7b-instruct"
+  ],
+  "models": [
+    "llama3.1:8b",
+    "qwen2.5-coder:7b",
+    "qwen2.5:7b-instruct"
+  ],
+  "styles": [
+    "typos_slang",
+    "vague",
+    "multi_request",
+    "pressure_unverified"
+  ],
+  "writer_temperature": 0.9,
+  "agent_temperature": 0.7,
+  "counts": {
+    "agent_runs": 120,
+    "parse_ok": 120
+  },
+  "sha256": {
+    "scenarios": "3d8a5e403d8c24e7e6c84c196a9f7233ce78fca5ce014ca85c93fa9ef1e26708",
+    "requests": "eabdb8adddd8af4776976d8014eb74403b4c27efb64c27d828fbb7b05084a261",
+    "agent_runs": "0887c3e593bdbf43081fbc8e9e196f7aa27882dfe849a7c06e3436f5b895a9eb"
+  },
+  "provenance": {
+    "date": "2026-11-09T06:26:49+00:00",
+    "experiment_repo_commit": "fa7fcfb91e2dda71c9438ef0d9b81608c3476762",
+    "orienta_commit": "unknown",
+    "boothpy_version": "0.5.8",
+    "ollama_version": "0.35.0",
+    "python": "3.12.7",
+    "node": "v20.19.5"
+  }
+}
