@@ -1,0 +1,28 @@
+{
+  "tag": "main",
+  "judges": [
+    "llama3.1:8b",
+    "qwen2.5-coder:7b",
+    "qwen2.5:7b-instruct"
+  ],
+  "threshold": 0.7,
+  "total_runs": 300,
+  "labeled_runs_at_first_start": 300,
+  "orienta_evaluator_versions": [
+    "orienta_engine_v0.3"
+  ],
+  "manifest_sha256": {
+    "scenarios": "a9115a3fa3c290affa0cfcd50d4dc0056d66909554d85c9553e45aff206db40b",
+    "requests": "64f5a0e4cf5173c02b5ab19653f0c8f7b61e023341db3bd3d69b739cd58f1148",
+    "agent_runs": "6f22d7675f3578c1f60c68843a95d745e78826dac5573589d262bdf0077ff66f"
+  },
+  "provenance": {
+    "date": "2026-11-12T04:41:05+00:00",
+    "experiment_repo_commit": "caa483e596b5c7212a0358966b5bddc0b9d58aa7",
+    "orienta_commit": "f16bf0b36829d810e3f768d8db564669e0fcc544",
+    "boothpy_version": "0.5.8",
+    "ollama_version": "0.35.0",
+    "python": "3.12.7",
+    "node": "v20.19.5"
+  }
+}

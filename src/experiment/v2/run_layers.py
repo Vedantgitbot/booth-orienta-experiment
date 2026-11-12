@@ -1,12 +1,4 @@
-"""
-Run BOOTH and Orienta on the frozen agent runs.
-BOOTH: each run is judged by the models that did not write it. Orienta: one call per run.
 
-  export ORIENTA_MCP_SERVER_DIR="$HOME/Desktop/orienta/mcp-server"
-  python src/experiment/v2/run_layers.py --tag pilot
-
-Resumable. Refuses to run if the data changed since manifest.json, or if runs are not labeled yet.
-"""
 import argparse
 import json
 import os
@@ -16,6 +8,12 @@ import common as c
 
 sys.path.insert(0, str(c.ROOT / "src" / "experiment" / "shared"))
 import booth_adapter  # noqa: E402
+
+
+def check_common():
+    if not hasattr(c, "ORIENTA_FLAGGED") or "run_meta" not in c.paths("x"):
+        raise SystemExit("common.py is out of date (missing ORIENTA_FLAGGED or the run_meta path). "
+                         "Replace src/experiment/v2/common.py with the latest version.")
 
 
 def verify_freeze(P, ignore):
@@ -43,6 +41,7 @@ def run_booth(P, runs, scs, judges):
         # booth_adapter reads its judge model from this module global (v1 prompt and flagging unchanged)
         booth_adapter._model = judge
         booth_adapter.COMPARATOR_VERSION = f"ollama_judge_v1|{judge}|threshold={booth_adapter.EVIDENCE_THRESHOLD}"
+        fails = 0
         for n, run in enumerate(todo, 1):
             rec = {"run_id": run["run_id"], "scenario_id": run["scenario_id"], "agent_model": run["agent_model"],
                    "judge_model": judge, "comparator": booth_adapter.COMPARATOR_VERSION, "ts": c.now_iso()}
@@ -55,6 +54,9 @@ def run_booth(P, runs, scs, judges):
                 rec.update(flagged=None, inconclusive=None, status=None, reason=None, detail=None,
                            checker_failed=None, score=None, judge_note=None, error=f"{type(e).__name__}: {e}")
             c.append_jsonl(P["booth"], rec)
+            fails = fails + 1 if rec["error"] else 0
+            if fails >= 5:
+                raise SystemExit(f"5 BOOTH calls in a row failed ({rec['error']}). Is Ollama running with {judge}?")
             if n % 25 == 0 or n == len(todo):
                 print(f"  {n}/{len(todo)}")
 
@@ -67,7 +69,7 @@ def run_orienta(P, runs, scs):
     done = {r["run_id"] for r in c.read_jsonl(P["orienta"]) if not r["error"]}
     todo = [r for r in runs if r["run_id"] not in done]
     print(f"Orienta: {len(todo)} runs")
-    cache = {}
+    cache, fails = {}, 0
     for n, run in enumerate(todo, 1):
         sc = scs[run["scenario_id"]]
         args = dict(objective=sc["objective"], context=c.context_of(sc), proposed_action=run["proposed_action"],
@@ -84,10 +86,14 @@ def run_orienta(P, runs, scs):
                        orientation_evidence=raw.get("orientation_evidence"),
                        evaluator_version=raw.get("evaluator_version"),
                        error=None if decision is not None else f"no 'decision' key: {str(raw)[:200]}")
-        except Exception as e:
+        except orienta_client.OrientaReviewError as e:
             rec.update(decision=None, flagged=None, reason_codes=None, reasoning=None, orientation_evidence=None,
                        evaluator_version=None, error=f"{type(e).__name__}: {e}")
         c.append_jsonl(P["orienta"], rec)
+        fails = fails + 1 if rec["error"] else 0
+        if fails >= 5:
+            raise SystemExit(f"5 Orienta calls in a row failed ({rec['error'][:200]}). "
+                             "Check ORIENTA_MCP_SERVER_DIR and that `node server.js` runs there.")
         if n % 25 == 0 or n == len(todo):
             print(f"  {n}/{len(todo)}")
 
@@ -101,8 +107,10 @@ def main():
     ap.add_argument("--skip-orienta", action="store_true")
     ap.add_argument("--ignore-freeze", action="store_true")
     ap.add_argument("--allow-unlabeled", action="store_true")
+    ap.add_argument("--only-labeled", action="store_true")
     a = ap.parse_args()
 
+    check_common()
     P = c.paths(a.tag, a.scenarios)
     verify_freeze(P, a.ignore_freeze)
     scs = {s["id"]: s for s in c.load_scenarios(P["scenarios"])}
@@ -110,7 +118,14 @@ def main():
                   key=lambda r: r["run_id"])
     if not runs:
         raise SystemExit("No parsed agent runs.")
-    labels = c.read_labels(P["labels"])[0] if P["labels"].exists() else {}
+    labels, errs = c.read_labels(P["labels"]) if P["labels"].exists() else ({}, [])
+    for e in errs[:5]:
+        print(f"WARNING: {e} (that row counts as unlabeled)", file=sys.stderr)
+    if a.only_labeled:
+        runs = [r for r in runs if r["run_id"] in labels]
+        if not runs:
+            raise SystemExit("No labeled runs. Label some rows first (label.py go).")
+        print(f"--only-labeled: running the {len(runs)} labeled rows only")
     n_labeled = sum(r["run_id"] in labels for r in runs)
     if n_labeled < len(runs) and not a.allow_unlabeled:
         raise SystemExit(f"Only {n_labeled} of {len(runs)} runs are labeled. Label first (see protocol), or pass "

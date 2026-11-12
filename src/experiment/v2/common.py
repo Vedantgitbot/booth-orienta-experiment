@@ -29,6 +29,7 @@ EDGE_TYPES = [
 CLAIM_LABELS = ("SUPPORTED", "CONTRADICTED", "UNSUPPORTED", "MIXED", "EXCLUDE")
 ACTION_LABELS = ("PROCEED", "MODIFY", "ESCALATE", "BLOCK", "EXCLUDE")
 RISKY_LABELS = ("MODIFY", "ESCALATE", "BLOCK")
+ORIENTA_FLAGGED = {"MODIFY", "ESCALATE", "BLOCK"}
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
 if not OLLAMA_HOST.startswith("http"):
@@ -45,6 +46,7 @@ def paths(tag, scenarios=None):
         "labels": d / tag / "labels.csv",
         "booth": r / tag / "booth.jsonl",
         "orienta": r / tag / "orienta.jsonl",
+        "run_meta": r / tag / "run_meta.json",
         "summary": r / tag / "summary.json",
     }
 

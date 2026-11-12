@@ -2,6 +2,7 @@
 Join labels with BOOTH and Orienta results and report.
 
   python src/experiment/v2/analyze.py --tag main [--booth-rule any|all|judge:<model>]
+  python src/experiment/v2/analyze.py --tag main --no-labels     (agreement only, no ground truth)
 
 claim_fail = claim_label != SUPPORTED, action_risk = action_label != PROCEED.
 Intervals resample whole base scenarios. "Complementary" is claimed only if H1, H2 and H3 all hold.
@@ -143,8 +144,8 @@ def booth_verdict(recs, rule):
     raise SystemExit(f"unknown --booth-rule {rule!r}")
 
 
-def load(P):
-    labels, errs = c.read_labels(P["labels"])
+def load(P, need_labels=True):
+    labels, errs = c.read_labels(P["labels"]) if need_labels else ({}, [])
     if errs:
         raise SystemExit("Label problems:\n  " + "\n  ".join(errs[:20]))
     booth = defaultdict(dict)
@@ -185,6 +186,69 @@ def build(raw, rule):
     return items, excluded
 
 
+def build_unlabeled(raw, rule):
+    items, excluded = [], Counter()
+    for rid, run in raw["runs"].items():
+        o = raw["orienta"].get(rid)
+        if not run["parse_ok"]:
+            excluded["agent output not parseable"] += 1
+        elif not o or o["error"] or o["flagged"] is None:
+            excluded["Orienta missing or errored"] += 1
+        else:
+            b = booth_verdict(raw["booth"].get(rid, {}), rule)
+            if b is None:
+                excluded["BOOTH missing, inconclusive or errored"] += 1
+                continue
+            items.append({"run_id": rid, "scenario_id": run["scenario_id"], "edge_type": run["edge_type"],
+                          "agent": run["agent_model"], "style": run["style"], "b": b, "o": bool(o["flagged"])})
+    return items, excluded
+
+
+def bucket(i):
+    return {(True, True): "both_flag", (True, False): "booth_only", (False, True): "orienta_only",
+            (False, False): "both_clear"}[(i["b"], i["o"])]
+
+
+def agreement_report(P, raw, rule):
+    items, excluded = build_unlabeled(raw, rule)
+    n = len(items)
+    print(f"tag={P['summary'].parent.name}  booth-rule={rule}  usable runs={n} of {len(raw['runs'])}")
+    for why, k in excluded.most_common():
+        print(f"  excluded: {why}: {k}")
+    if n < 10:
+        raise SystemExit("Fewer than 10 usable runs.")
+    print("\n  NO GROUND TRUTH. This shows where the two layers agree and differ. It does NOT say which flags are")
+    print("  right, so it cannot support any claim about catching failures or about complementarity.")
+    cnt = Counter(bucket(i) for i in items)
+    pb, po = sum(i["b"] for i in items) / n, sum(i["o"] for i in items) / n
+    agree = (cnt["both_flag"] + cnt["both_clear"]) / n
+    pe = pb * po + (1 - pb) * (1 - po)
+    kappa = None if pe == 1 else (agree - pe) / (1 - pe)
+    print(f"\nFLAG RATES   BOOTH {sum(i['b'] for i in items)}/{n} = {100 * pb:.0f}%   Orienta {sum(i['o'] for i in items)}/{n} = {100 * po:.0f}%")
+    print("BUCKETS      " + "  ".join(f"{k}={cnt[k]}" for k in ("both_flag", "booth_only", "orienta_only", "both_clear")))
+    print(f"AGREEMENT    {100 * agree:.0f}% of runs get the same verdict from both layers"
+          + ("" if kappa is None else f"  (kappa {kappa:.2f}; 0 = no more agreement than chance)"))
+    out = {"booth_rule": rule, "usable_runs": n, "excluded": dict(excluded), "buckets": dict(cnt),
+           "booth_flag_rate": pb, "orienta_flag_rate": po, "agreement": agree, "kappa": kappa, "breakdowns": {}}
+    for title, key in (("EDGE TYPE", "edge_type"), ("AGENT", "agent"), ("STYLE", "style")):
+        print(f"\nBY {title}")
+        out["breakdowns"][key] = {}
+        for val in sorted({i[key] for i in items}):
+            sub_items = [i for i in items if i[key] == val]
+            k = Counter(bucket(i) for i in sub_items)
+            print(f"  {val:28s} runs={len(sub_items):<4} BOOTH flags {sum(i['b'] for i in sub_items):>3}  "
+                  f"Orienta flags {sum(i['o'] for i in sub_items):>3}  booth_only={k['booth_only']} orienta_only={k['orienta_only']}")
+            out["breakdowns"][key][val] = dict(k)
+    print("\nRUNS TO READ (spot-check by hand; this is how you would find out who is right)")
+    for b in ("booth_only", "orienta_only"):
+        ids = [i["run_id"] for i in items if bucket(i) == b][:8]
+        print(f"  {b}: {ids}")
+        out[f"examples_{b}"] = ids
+    dest = P["summary"].with_name("summary_unlabeled.json")
+    c.write_json(dest, out)
+    print(f"\nSummary written to {dest}")
+
+
 def quadrant(i):
     return {(False, False): "neither", (True, False): "claim_only",
             (False, True): "action_only", (True, True): "both"}[(i["claim_fail"], i["action_risk"])]
@@ -208,9 +272,14 @@ def main():
     ap.add_argument("--tag", default="pilot")
     ap.add_argument("--scenarios", default=None)
     ap.add_argument("--booth-rule", default="any")
+    ap.add_argument("--no-labels", action="store_true", help="agreement report only; needs no labels")
     a = ap.parse_args()
+    if "run_meta" not in c.paths("x"):
+        raise SystemExit("common.py is out of date (missing the run_meta path). Replace it with the latest version.")
     P = c.paths(a.tag, a.scenarios)
-    raw = load(P)
+    raw = load(P, need_labels=not a.no_labels)
+    if a.no_labels:
+        return agreement_report(P, raw, a.booth_rule)
     meta = json.loads(P["run_meta"].read_text()) if P["run_meta"].exists() else {}
     items, excluded = build(raw, a.booth_rule)
     out = {"tag": a.tag, "booth_rule": a.booth_rule, "usable_runs": len(items), "excluded": dict(excluded), "meta": meta}
