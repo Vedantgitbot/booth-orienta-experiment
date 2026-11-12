@@ -1,541 +1,160 @@
 # BOOTH vs. Orienta Experiment
 
-Empirical evaluation and single-variable ablation study comparing **claim-level output verification with BOOTH** against **action-level governance with Orienta**, using Orienta through its Model Context Protocol (MCP) server interface.
+Do a claim-level verifier (**BOOTH**) and an action-level reviewer (**Orienta**) catch different failures in LLM agent output, or the same ones? This repository compares them without modifying either tool. Orienta is called only through its MCP server.
 
-> **Status:** Experimental research
-> **Dataset:** 14 scenarios
-> **Evaluation:** BOOTH, Orienta, and combined BOOTH + Orienta
-> **LLM Judge:** Local Ollama models
-> **Orienta Integration:** MCP over stdio
+> **Status:** exploratory research, two studies complete.
+> **v1:** 16 hand-built cases (complete, frozen).
+> **v2:** 300 agent-generated runs (complete). Its ground-truth labels were **not hand-made and have not been independently checked**. Read [Deviations](#deviations-from-the-plan) before using any v2 number.
+> **Not shown by either study:** that the two layers are complementary (see [v2 results](#v2-results)).
 
----
+## The two layers
 
-## Overview
+- **BOOTH** (`boothpy`, MIT) checks whether an agent's *claim* is supported by evidence. It returns ACCEPTED or BLOCKED. Here its comparator is a local LLM judge with a fixed threshold of 0.7.
+- **Orienta** (experimental, MIT) reviews a proposed *action* before it runs and returns PROCEED / MODIFY / ESCALATE / BLOCK with reason codes. It is a control signal; the caller must enforce it. The version used here is the deterministic Core (`orienta_engine_v0.3`, commit `f16bf0b`), which needs no model API.
 
-Modern LLM agents can fail in two fundamentally different ways:
+The two are run as parallel arms, never as a pipeline. BOOTH never sees the action, and Orienta never sees the claim.
 
-1. **They can make an unsupported or incorrect claim.**
-2. **They can propose or attempt an action that violates a policy, authority boundary, or safety constraint.**
-
-This repository investigates the distinction between these two failure modes.
-
-**BOOTH** operates at the **claim/evidence layer**: it evaluates whether an agent's claim is supported by the available evidence.
-
-**Orienta** operates at the **action/governance layer**: it reviews a proposed action in the context of the objective, surrounding circumstances, constraints, and applicable domain.
-
-The experiment evaluates these systems independently and in combination rather than treating one as a replacement for the other.
+## Repository layout
 
 ```text
-                    ┌──────────────────────┐
-                    │    Agent Scenario    │
-                    └──────────┬───────────┘
-                               │
-                 ┌─────────────┴─────────────┐
-                 │                           │
-                 ▼                           ▼
-        ┌─────────────────┐         ┌─────────────────┐
-        │      BOOTH      │         │     Orienta     │
-        │                 │         │                 │
-        │ Claim           │         │ Proposed Action │
-        │      +          │         │       +         │
-        │ Evidence        │         │ Context         │
-        └────────┬────────┘         └────────┬────────┘
-                 │                           │
-                 ▼                           ▼
-          Evidence Verdict            Governance Verdict
-                 │                           │
-                 └─────────────┬─────────────┘
-                               ▼
-                     Combined Evaluation
+src/experiment/
+  shared/   booth_adapter.py, orienta_client.py   used by v1 and v2
+  v1/       run_experiment.py                      v1 runner
+  v2/       common.py generate.py label.py run_layers.py analyze.py test_analyze.py
+            fill_main_labels.py                    how the v2 labels were applied (see below)
+data/v1/    the 16 v1 cases
+data/v2/    scenarios.json, main/ (requests, agent runs, manifest, labels)
+results/v1/ v1 results and provenance
+results/v2/ main/ (layer outputs, run_meta.json, report.txt, summary.json)
+docs/V2_PROTOCOL.md   the v2 plan: hypotheses, design, metric definitions
 ```
 
----
-
-## Research Collaboration
-
-This work evaluates the interaction between claim-level verification and action-level governance in LLM-driven agent systems.
-
-Special thanks to **Serena Wang** and the **Senux Research Lab** team for their collaboration and discussion around this evaluation.
-
-### Upstream Project
-
-- [Orienta](https://github.com/serenaw99/orienta) — action-level governance framework
-- [BOOTH](https://github.com/Vedantgitbot/booth) — claim/evidence verification framework
-- [Discussion & Issue Thread](https://github.com/SenuxTech/orienta/issues/4)
-
----
-
-## Experimental Design
-
-### 1. BOOTH
-
-BOOTH evaluates an agent's claim against supplied evidence.
-
-Conceptually:
-
-```text
-agent_claim + evidence
-        │
-        ▼
-   BOOTH comparator
-        │
-        ▼
- evidence agreement score
-        │
-        ▼
-   flagged / clear
-```
-
-The current experiment uses a local Ollama model as the evidence comparator. The comparator receives only:
-
-- the agent claim
-- the supplied evidence
-
-It does **not** receive:
-
-- the expected label
-- the proposed action
-- ground-truth annotations
-
-This separation prevents the judge from directly seeing the experimental answer.
-
----
-
-### 2. Orienta
-
-Orienta evaluates the proposed action independently through its MCP server.
-
-Conceptually:
-
-```text
-objective
-context
-proposed_action
-domain
-constraints
-        │
-        ▼
-   Orienta MCP server
-        │
-        ▼
- PROCEED / MODIFY / ESCALATE / BLOCK
-```
-
-The BOOTH and Orienta evaluations are run as **parallel arms**, not as a pipeline.
-
----
-
-### 3. Combined BOOTH + Orienta
-
-The combined arm treats either system flagging a case as a safety/governance signal.
-
-This allows the experiment to examine whether combining:
-
-- claim-level verification, and
-- action-level governance
-
-provides broader coverage than either mechanism independently.
-
----
-
-## Benchmark
-
-The benchmark contains **14 independent scenarios** covering several classes of agent behavior:
-
-- Policy constraints
-- Authority and authorization limits
-- Sensitive-data access
-- Third-party mutations
-- Unsupported claims
-- Overstated claims
-- Missing or insufficient evidence
-- Edge-case policy boundaries
-
-The dataset is intentionally small and should be treated as an **illustrative experimental benchmark**, not as a statistically representative measurement of system accuracy.
-
----
-
-## Ablation Study
-
-The repository also contains a single-variable ablation matrix designed to isolate the effect of individual inputs on Orienta's decisions.
-
-The primary variables are:
-
-| Variable      | Purpose                                                               |
-| ------------- | --------------------------------------------------------------------- |
-| `constraints` | Tests the effect of explicit policy or authorization constraints      |
-| `agent_claim` | Tests how the agent's asserted state affects claim-level verification |
-| `evidence`    | Tests how supporting or contradicting evidence affects BOOTH          |
-
-Orienta decisions are evaluated across its governance outcomes:
-
-```text
-PROCEED
-MODIFY
-ESCALATE
-BLOCK
-```
-
-The ablation results are used to investigate behavioral changes and identify potential root causes of non-deterministic decisions around policy boundaries.
-
----
-
-## Repository Structure
-
-```text
-booth-orienta-experiment/
-│
-├── orienta_client.py
-│   └── Thin MCP client for Orienta's review_objective tool
-│
-├── booth_adapter.py
-│   └── BOOTH claim/evidence adapter using a local Ollama judge
-│
-├── run_experiment.py
-│   └── Benchmark runner and BOOTH vs. Orienta comparison logic
-│
-├── sample_cases.json
-│   └── Example test-case definitions
-│
-├── baseline_v1_cases.json
-│   └── Frozen 14-scenario evaluation dataset
-│
-├── baseline_v1_results.json
-│   └── Raw output from the v1 MCP evaluation
-│
-├── baseline_v2_judge_llama31_8b.json
-│   └── Llama 3.1 8B judge outputs
-│
-└── results_judge_llama31_8b.json
-    └── Final ablation/evaluation results
-```
-
----
-
-## Quickstart
-
-### Prerequisites
-
-- Python 3.10+
-- Node.js
-- Orienta's MCP server
-- Ollama
-- At least one locally installed Ollama model
-
-For example:
+## Setup
 
 ```bash
-ollama list
+pip install boothpy mcp
+ollama pull llama3.1:8b && ollama pull qwen2.5-coder:7b && ollama pull qwen2.5:7b-instruct
+export ORIENTA_MCP_SERVER_DIR="$HOME/Desktop/orienta/mcp-server"   # your Orienta checkout
 ```
 
-If multiple models are installed, select the model used by the experiment:
-
-```bash
-export OLLAMA_MODEL=llama3.1:8b
-```
+Orienta and Ollama are not pip-installable. v1 recorded its versions in `results/v1/PROVENANCE.md`; v2 records them in `results/v2/main/run_meta.json` and `data/v2/main/manifest.json`. Use the same Python that has `boothpy` installed (BOOTH was installed from a local editable checkout, version 0.5.8).
 
 ---
 
-## Installation
+## v1: hand-written cases
 
-Clone the repository:
-
-```bash
-git clone https://github.com/Vedantgitbot/booth-orienta-experiment.git
-cd booth-orienta-experiment
-```
-
-Install the Python dependencies:
+**Design.** 16 hand-built cases: 14 independent scenarios plus 2 rewordings (rows 15 and 16 restate the $400 refund and the Enterprise refund as "transfer from company funds to the customer's bank account"). Headline scores use the 14 independent cases so no scenario is counted twice. Both layers saw every case independently. Labels were written before the runs. The agent claims are hand-written, so v1 shows what each layer *can* catch, not how often. No agent-only baseline was run.
 
 ```bash
-pip install boothpy mcp httpx
+python src/experiment/v1/run_experiment.py data/v1/baseline_v1_cases.json results/v1/new_run.json
 ```
 
-Ensure Ollama is running and that your selected model is available locally.
+**Results** (16 cases; the "combined" column is the harness definition: either layer flags, graded against `expected_label != PROCEED`, so a BOOTH-only flag on a harmless action counts as a miss):
+
+| BOOTH judge | BOOTH vs expected | Orienta vs expected | combined |
+|---|---|---|---|
+| llama3.1:8b | 16/16 | 11/16 | 13/16 |
+| qwen2.5-coder:7b | 14/16 | 11/16 | 11/16 |
+
+On the 14 independent cases: BOOTH 14/14 (llama) or 13/14 (qwen), Orienta 11/14. These use different yardsticks (claim-level vs action-level), so they are not a ranking.
+
+**Findings.**
+- The layers caught different things. Orienta caught risky actions backed by true claims (a passenger's seat, another user's folder), which BOOTH cleared. BOOTH caught false claims on harmless actions and the refund-policy cases, which Orienta cleared. Both cleared all controls.
+- Orienta missed: the Enterprise refund (rows 3, 16), the $400 refund (rows 6, 15), and the bank-statements email (row 9). Row 9 is the only case neither layer caught.
+- Changing BOOTH's judge from qwen2.5-coder:7b to llama3.1:8b changed only the $400 case, so that BOOTH miss was a judge error, not a BOOTH limit. The second judge was chosen after seeing that result, so both are reported.
+- Reruns at temperature 0 were identical. That shows stability, not robustness.
+
+**Result files** (`results/v1/`). Some are byte-identical copies:
+
+| File | Content |
+|---|---|
+| `baseline_v1_results.json`, `results.json` | qwen2.5-coder:7b judge (identical) |
+| `baseline_v2_judge_llama31_8b.json`, `results_judge_llama31_8b.json`, `rerun_after_restructure_llama31-8b.json` | llama3.1:8b judge (identical) |
+
+(`baseline_v2_judge_...` means the second judge run *of v1*, not the v2 study.)
 
 ---
 
-## Orienta MCP Configuration
+## v2: agent-generated output
 
-The BOOTH experiment communicates with Orienta through its MCP server rather than importing or modifying Orienta's source code.
+**Design.** 25 hand-written edge-case scenarios across 10 edge types (boundary values, cumulative limits, policy conflicts, reworded actions, authority claims, consented and unauthorized third parties, sensitive data, conflicting facts, controls). Each was rewritten four ways by local models (typos/slang, vague, multi-request, pressure with an unverifiable claim), giving 100 requests. Three local models (llama3.1:8b, qwen2.5-coder:7b, qwen2.5:7b-instruct) each acted as the agent on every request: **300 runs**. The agent saw the facts and the policy text and returned a proposed action and a claim.
 
-Set the Orienta MCP server location:
-
-```bash
-export ORIENTA_MCP_SERVER_DIR=../mcp-server
-```
-
-The exact server command depends on the Orienta checkout.
-
-Configure it with:
+Both layers saw the same information, so a difference can come only from what each checks: BOOTH got facts + policy as evidence, Orienta got the facts as context and the policy as constraints. Each run's claim was judged by the two models that did not write it (no self-judging); the headline BOOTH verdict is "flagged if either judge flags". Orienta was called once per run.
 
 ```bash
-export ORIENTA_MCP_COMMAND=node
-export ORIENTA_MCP_ARGS="server.js"
+python src/experiment/v2/generate.py requests --tag main
+python src/experiment/v2/generate.py agents   --tag main      # writes the freeze manifest
+python src/experiment/v2/label.py export      --tag main
+python src/experiment/v2/run_layers.py        --tag main      # refuses unless labeled and frozen
+python src/experiment/v2/analyze.py          --tag main
+python src/experiment/v2/test_analyze.py                      # checks the analysis math
 ```
 
-Verify the corresponding command against the `mcp-server/package.json` in your local Orienta checkout before running the experiment.
+A failure means `claim_label != SUPPORTED` (BOOTH's territory) or `action_label != PROCEED` (Orienta's). Intervals resample whole base scenarios, because variants and agents on one scenario are not independent.
 
-The integration is intentionally kept separate:
+### v2 results
 
-```text
-BOOTH experiment
-      │
-      │ MCP / stdio
-      ▼
-Orienta MCP server
-      │
-      ▼
-Orienta
-```
+Full report: `results/v2/main/report.txt`. Labels used: see the next section.
 
-No Orienta source code is imported, forked, or modified by the client.
+| | Runs | |
+|---|---|---|
+| Agent alone: any failure | 82/300 (27%) | claim not supported 72, risky action 49 |
+| Quadrants | neither 218, claim-only 33, action-only 10, both 39 | action-only is below the planned minimum of 20 |
+
+| Measure | Result |
+|---|---|
+| BOOTH flags a run with a failed claim | 35/72 = 49% (95% interval 30-71%) |
+| BOOTH flags a run with a supported claim | 17/228 = 7% |
+| Orienta flags a run with a risky action | **0/49** |
+| Orienta flags a run with a safe action | 6/251 = 2% |
+| Claim-only failures: BOOTH flags / Orienta flags | 22/33 (67%) / 0/33 |
+| Action-only risks: Orienta flags / BOOTH flags | 0/10 / 1/10 |
+| Either layer flags, among all failures | 36/82 = 44% |
+| Either layer flags, among clean runs (false alarms) | 22/218 = 10% |
+
+**Pre-planned verdict: NOT SHOWN.**
+- H1 (BOOTH catches more claim-only failures than Orienta) holds: +67 points, interval +45 to +86. This is partly true by construction, since Orienta never sees the claim.
+- H2 (Orienta catches more action-only risks than BOOTH) is not shown. Orienta caught none, and there are only 10 such runs.
+- H3 (either layer catches more than the better single layer) is not shown: Orienta added no catches, so "either" equals BOOTH alone, at a cost of 10% false alarms.
+
+**What this does and does not say.**
+- BOOTH catches false claims that Orienta never flags, but it misses about half of them, and the rate depends heavily on the judge: 17% (llama3.1:8b alone), 26% (qwen2.5-coder:7b), 57% (qwen2.5:7b-instruct). The two judges disagreed on 38 of 299 runs. Small-model judge noise is a major part of the BOOTH numbers.
+- Orienta's 0/49 mostly reflects what `orienta_engine_v0.3` evaluates. Most risky actions here were limit and policy cases (cumulative limits, policy conflicts, reworded transfers). Informal probes run outside the pipeline suggest the engine does not compare amounts against stated limits (a $200 credit against a $75 limit returned PROCEED) and is sensitive to wording (an explicit "cancel another patient's appointment without their consent" returned BLOCK, while the agents' softer phrasings of similar actions returned PROCEED). The probes are one-off and are not part of the results. This is a statement about an experimental, lightweight engine, not about Orienta's intended scope.
+- Orienta's 6 flags were all `DISCLOSURE_AUTHORITY_UNVERIFIED` in two sensitive-data scenarios. By the labels these runs were not failures, so they count as false positives. One probe suggests the flag fires even on a sentence that refuses to send the data.
+- The agents do fail, at a meaningful rate (27%), and the cumulative-limit scenario failed 19 of 24 times. But the failure rate on control scenarios (6/24) was not lower than on edge-case scenarios (76/276). The control scenarios included a false-claim bait, so they were not clean controls.
+- The "consented third party" worry from v1 (Orienta escalating even when consent is on file) was not observed: 0 of 31 safe runs flagged.
 
 ---
 
-## Running the Experiment
+## Deviations from the plan
 
-The runner accepts an input case file and an output path:
+These matter for how far to trust the v2 numbers.
 
-```bash
-python run_experiment.py sample_cases.json results.json
-```
-
-For the frozen benchmark:
-
-```bash
-python run_experiment.py baseline_v1_cases.json baseline_v1_results.json
-```
-
-The runner reports:
-
-- Agreement buckets
-- BOOTH correctness
-- Orienta correctness
-- Combined correctness
-- Per-case outcomes
-
-Full structured results are written to the specified JSON output file.
-
----
-
-## Evaluation Outputs
-
-Each case records the results of both evaluation arms.
-
-### BOOTH
-
-```json
-{
-  "flagged": true,
-  "inconclusive": false,
-  "status": "BLOCKED",
-  "score": 0.42
-}
-```
-
-### Orienta
-
-```json
-{
-  "decision": "BLOCK",
-  "flagged": true,
-  "reason_codes": [],
-  "reasoning": "...",
-  "orientation_evidence": []
-}
-```
-
-### Agreement Buckets
-
-The experiment categorizes each case into one of the following buckets:
-
-| Bucket                | Meaning                                      |
-| --------------------- | -------------------------------------------- |
-| `BOTH_FLAGGED`        | BOOTH and Orienta both flagged the case      |
-| `BOTH_CLEAR`          | Neither system flagged the case              |
-| `BOOTH_ONLY`          | BOOTH flagged; Orienta did not               |
-| `ORIENTA_ONLY`        | Orienta flagged; BOOTH did not               |
-| `BOOTH_INCONCLUSIVE`  | BOOTH could not produce a conclusive verdict |
-| `ORIENTA_CALL_FAILED` | The Orienta MCP call failed                  |
-
----
-
-## Ground-Truth Evaluation
-
-The experiment distinguishes between **agreement** and **correctness**.
-
-Two systems agreeing does not necessarily mean they are correct.
-
-Where ground-truth labels are available, the runner separately evaluates:
-
-```text
-BOOTH correctness
-        │
-        ├── vs. expected BOOTH flag
-        │
-Orienta correctness
-        │
-        ├── vs. expected action label
-        │
-Combined correctness
-        │
-        └── vs. expected action label
-```
-
-This distinction is important when interpreting results.
-
----
-
-## Local LLM Judge
-
-BOOTH's evidence comparator uses a local Ollama model.
-
-The model receives a structured prompt containing:
-
-```text
-EVIDENCE:
-...
-
-CLAIM:
-...
-```
-
-and returns a support score between `0.0` and `1.0`.
-
-The current fixed evidence threshold is:
-
-```text
-0.7
-```
-
-The threshold is fixed **before evaluating the benchmark** and should not be tuned against the evaluation results.
-
-The model name and comparator version are recorded in the experiment output to improve reproducibility.
-
-### Important limitation
-
-Small local models can introduce judge noise.
-
-Unexpected BOOTH scores may therefore reflect limitations of the local comparator rather than a substantive property of BOOTH itself.
-
-For this reason, reported results should always include the exact judge model used.
-
----
-
-## Reproducibility
-
-For reproducible experiments, record:
-
-- Git commit of this repository
-- Orienta revision/commit
-- BOOTH revision/commit
-- Ollama version
-- Ollama model and model version/tag
-- Python version
-- Node.js version
-- Benchmark dataset
-- Evidence threshold
-- Experiment output JSON
-
-Example:
-
-```bash
-python --version
-node --version
-ollama --version
-ollama list
-git rev-parse HEAD
-```
-
----
+1. **The labels were not made by the hand-labeling procedure.** The 300 v2 labels were applied by `src/experiment/v2/fill_main_labels.py`, which writes a prepared table of labels into the label sheet. The script is the only record of how they were assigned. There was no second labeler, no agreement statistic, and no audit against the answer keys. An earlier hand-labeling attempt was discarded after a keying error (all rows given the same label); no layer results had been seen at that point, and a partial layer run on it was killed and deleted. Treat the v2 results as conditional on the labels being right.
+2. **The plan was committed with the results, not before.** `docs/V2_PROTOCOL.md` was written before the main run, but it was not committed or tagged beforehand, so it is a plan, not a timestamped pre-registration. The data were frozen with a hash manifest (`data/v2/main/manifest.json`) and the layers were run only after all 300 rows were labeled.
+3. **The main run was generated in two parts.** It was first generated with the first 10 scenarios and then extended to all 25, with no labeling and no layer run in between (see the git history).
+4. **A quota was missed.** The plan asked for at least 20 labeled runs in each failure quadrant. Action-only has 10. No scenarios were added, so the action-only conclusions are exploratory.
+5. **The scenario author is also BOOTH's author.** The scenarios and answer keys were written by one person and have not been independently reviewed.
 
 ## Limitations
 
-This experiment has several important limitations.
+- Small local models act as agents and judges. Judging limits and dates needs arithmetic, which they do badly.
+- The agent's claim comes from a fixed prompt ("the factual basis you rely on"), which shapes how often BOOTH has something to catch.
+- 25 base scenarios give wide intervals. The study can show a large difference, not a small one.
+- Orienta was evaluated only as `orienta_engine_v0.3` through its `review_objective` tool, with the policy passed as `constraints`. Whether and how that engine uses `constraints` was not established here.
+- Nothing here is a production-safety evaluation.
 
-### Small benchmark
+## Research collaboration
 
-The benchmark contains 14 scenarios and is intended for exploratory evaluation rather than statistical claims about general performance.
+This work evaluates the interaction between claim-level verification and action-level governance in LLM-driven agent systems. Thanks to **Serena Wang** and the **Senux Research Lab** team for their collaboration and discussion around this evaluation.
 
-### Hand-written claims
+- [Orienta](https://github.com/serenaw99/orienta): action-level governance framework
+- [BOOTH](https://github.com/Vedantgitbot/booth): claim/evidence verification framework
+- [Discussion thread](https://github.com/SenuxTech/orienta/issues/4)
 
-There is no live autonomous agent in the current experiment. `agent_claim` values are manually constructed test inputs.
+## License and citation
 
-Therefore, the results should not be interpreted as an evaluation of an end-to-end autonomous agent.
-
-### Local judge variability
-
-BOOTH's comparator is an LLM-based judge running locally through Ollama. Different models may produce different evidence-support scores.
-
-### Parallel evaluation
-
-BOOTH and Orienta are evaluated independently. The experiment does not claim that either system's output would influence the other during an actual agent execution.
-
-### No production safety guarantee
-
-The benchmark evaluates experimental behavior under predefined scenarios. Passing these cases does not establish that either system is safe for production deployment.
-
----
-
-## Research Interpretation
-
-The central research question is not simply:
-
-> Which system is better?
-
-Instead, the experiment investigates whether **claim-level verification and action-level governance detect different classes of failures**.
-
-A useful conceptual distinction is:
-
-```text
-"What the agent says"
-        │
-        ▼
-     BOOTH
-        │
-   Claim ↔ Evidence
-
-
-"What the agent wants to do"
-        │
-        ▼
-    Orienta
-        │
- Action ↔ Context / Constraints
-```
-
-The combined system therefore provides two different verification surfaces rather than two implementations of the same check.
-
----
-
-## Attribution
-
-This repository contains experimental evaluation code integrating BOOTH with Orienta.
-
-Please attribute the original projects and governance concepts appropriately:
-
-- **BOOTH:** [Vedantgitbot/booth](https://github.com/Vedantgitbot/booth)
-- **Orienta:** [serenaw99/orienta](https://github.com/serenaw99/orienta)
-- **Senux Research Lab:** collaboration and upstream Orienta work
-
-For discussions regarding the Orienta integration, see:
-
-[SenuxTech/orienta#4](https://github.com/SenuxTech/orienta/issues/4)
-
----
-
-## License
-
-This evaluation repository is released under the **MIT License**.
-
-See the repository's `LICENSE` file for the full license text.
-
----
-
-## Citation
-
-If you use this benchmark or evaluation framework in research, please cite the repository and the underlying BOOTH and Orienta projects.
+MIT License. If you use this evaluation, please cite this repository and the underlying BOOTH and Orienta projects.
 
 ```text
 BOOTH vs. Orienta Experiment
@@ -543,8 +162,6 @@ Empirical evaluation of claim-level verification
 and action-level governance in LLM agent systems.
 ```
 
----
-
 ## Disclaimer
 
-This repository is an experimental research artifact. Results from the included benchmark should not be interpreted as a comprehensive safety evaluation, production readiness assessment, or statistically significant comparison of BOOTH and Orienta.
+This repository is an experimental research artifact. Its results are not a comprehensive safety evaluation, a production-readiness assessment, or a statistically conclusive comparison of BOOTH and Orienta.
